@@ -385,6 +385,14 @@ void DrawMax30105Screen() {
   display.display();
 }
 
+
+// 菜单切换动画：利用 SSD1306 硬件滚动实现页面切换反馈。
+void PlayMenuSwitchAnimation() {
+  display.startscrollleft(0x00, 0x07);
+  delay(180);
+  display.stopscroll();
+}
+
 // 根据当前页索引刷新 OLED。
 void UpdateDisplay() {
   switch (screenIndex) {
@@ -667,6 +675,7 @@ void loop() {
   bool buttonPressed = digitalRead(kButtonPin) == HIGH;
   if (buttonPressed && !buttonLatched) {
     buttonLatched = true;
+    PlayMenuSwitchAnimation();
     screenIndex = (screenIndex + 1) % 5;  // 5 个页面循环
     UpdateDisplay();
   } else if (!buttonPressed) {
