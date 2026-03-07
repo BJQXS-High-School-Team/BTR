@@ -52,6 +52,7 @@ struct WiFiCredential {
 };
 
 constexpr WiFiCredential kWifiNetworks[] = {
+  {"zzz", "12345678"},
   {"blackmi", "wxy358800"},
   {"点击确认父子关系", "12345678"}
 };
@@ -70,10 +71,10 @@ constexpr char kMqttSubTopic[] = "statue"; // 按需求拼写
 constexpr float kTempAmbientWarnC = 50.0f;
 constexpr float kTempInternalWarnC = 50.0f;
 constexpr float kHumidityWarnPercent = 80.0f;
-constexpr float kMq2WarnPpm = 100.0f;
-constexpr float kMq4WarnPpm = 100.0f;
-constexpr float kMq8WarnPpm = 200.0f;
-constexpr float kMq7WarnPpm = 500.0f;
+constexpr float kMq2WarnPpm = 200.0f;
+constexpr float kMq4WarnPpm = 150.0f;
+constexpr float kMq8WarnPpm = 300.0f;
+constexpr float kMq7WarnPpm = 600.0f;
 constexpr float kVocIndexWarn = 200.0f;
 
 // MAX30105 阈值：烟雾、温度
@@ -388,7 +389,7 @@ void DrawMax30105Screen() {
 
 // 菜单切换动画：利用 SSD1306 硬件滚动实现页面切换反馈。
 void PlayMenuSwitchAnimation() {
-  display.startscrollleft(0x00, 0x07);
+  display.startscrollleft(0x00, 0x0F);
   delay(180);
   display.stopscroll();
 }
@@ -675,7 +676,7 @@ void loop() {
   bool buttonPressed = digitalRead(kButtonPin) == HIGH;
   if (buttonPressed && !buttonLatched) {
     buttonLatched = true;
-    PlayMenuSwitchAnimation();
+    // PlayMenuSwitchAnimation();
     screenIndex = (screenIndex + 1) % 5;  // 5 个页面循环
     UpdateDisplay();
   } else if (!buttonPressed) {
