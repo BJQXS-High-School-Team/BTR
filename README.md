@@ -1,177 +1,133 @@
-# BTR（Battery Thermal Runaway）电池热失控监测与预测系统
+# BTR 电池热失控监测与预测系统
 
-本仓库包含一个**端云协同**的电池热失控监测方案：
-- **ESP32 端**负责多传感器采集、状态判定、声光告警和 MQTT 上报；
-- **Computer 端（Python）**负责模型训练与在线推理，对 ESP32 状态进行二次校验与纠偏。
+本仓库包含一个端云协同的电池热失控监测方案：
+
+- ESP32 端负责多传感器采集、本地阈值判断、OLED 显示、声光报警、网页监控、AP 配网和 MQTT 上报。
+- 电脑端负责 MQTT 数据接收、RF/LSTM/CNN-LSTM/Transformer 在线推理、状态纠偏和桌面状态显示。
+- 云端/电脑端可向 ESP32 下发 `normal`、`warning`、`danger` 状态，其中 `danger` 采用本地锁存报警机制。
 
 ## 项目结构
 
 ```text
 BTR/
-├── ESP32/BTR/                         # PlatformIO 工程（嵌入式固件）
-│   ├── src/main.cpp                   # 主程序：采样、状态机、MQTT 收发、OLED/蜂鸣器/灯控
+├── ESP32/BTR/                         # PlatformIO ESP32-S3 固件工程
+│   ├── src/main.cpp                   # 采样、网页、SPIFFS、MQTT、状态机、OLED/蜂鸣器/灯控
 │   ├── platformio.ini                 # 板卡与依赖配置
-│   └── examples/                      # 各传感器/模块示例代码
+│   └── examples/                      # 传感器/模块示例代码
 │
-├── computer/                          # Python 端（训练 + 在线预测）
-│   ├── main.py                        # MQTT 监听 + 模型推理 + 状态纠偏回传
-│   ├── train_modelLSTM.py             # LSTM 模型训练脚本
-│   ├── train_model_lstm_60s.py        # LSTM 模型（60 秒序列）
-│   ├── train_model_cnnlstm.py         # CNN+LSTM 混合模型训练脚本
-│   ├── train_model_transformer.py     # Transformer 模型训练脚本
-│   ├── train_model_random_forest.py   # 随机森林模型训练脚本
+├── computer/                          # Python 端
+│   ├── rf_status_app.py               # RF 推理 + Tkinter 桌面状态显示二合一
+│   ├── main_RF.py                     # 随机森林在线推理
+│   ├── main_LSTM.py                   # LSTM 在线推理
+│   ├── main_cnn_lstm.py               # CNN-LSTM 在线推理
+│   ├── main_transformer.py            # Transformer 在线推理
+│   ├── train_model_random_forest.py   # 随机森林训练脚本
+│   ├── train_modelLSTM.py             # LSTM 训练脚本
+│   ├── train_model_lstm_60s.py        # 60 秒 LSTM 训练脚本
+│   ├── train_model_cnnlstm.py         # CNN-LSTM 训练脚本
+│   ├── train_model_transformer.py     # Transformer 训练脚本
 │   ├── requirements.txt               # Python 依赖
-│   ├── data/                          # 训练数据（CSV）
-│   ├── models_LSTM/                   # 已训练 LSTM 产物
-│   ├── models_lstm_60s/               # 已训练 LSTM(60s) 产物
-│   ├── models_cnn_lstm/               # 已训练 CNN-LSTM 产物
-│   ├── models_transformer/            # 已训练 Transformer 产物
-│   └── models_random_forest/          # 已训练随机森林产物
+│   ├── data/                          # 训练数据
+│   └── models_*/                      # 各模型产物目录
 │
 └── README.md
 ```
 
----
+## ESP32 端功能
 
-## 1. ESP32 端能力概览
+`ESP32/BTR/src/main.cpp` 当前实现：
 
-`ESP32/BTR/src/main.cpp` 已实现：
+- 多传感器采集：
+  - 内部温度：MAX31865 + PT100
+  - 外部温湿度：SHT4x
+  - VOC：SGP41
+  - 气体：MQ-2 / MQ-4 / MQ-7 / MQ-8
+  - 烟雾和 MAX 温度：MAX30105
+- 2Hz 采样，维护最近 10 秒历史窗口。
+- 本地状态分级：`NORMAL` / `WARNING` / `DANGER`。
+- OLED 常驻显示当前 IP 地址。
+- WS2812、蜂鸣器与状态联动。
+- 网页端实时显示传感器数值、状态和变化曲线。
+- 网页端支持修改传感器阈值。
+- 网页端支持按最近 10 秒平均值或最大值加冗余量自动生成阈值。
+- 网页端传感器数值超过阈值时立即高亮。
+- 初次使用或 WiFi 不可用时启动 AP 配网页面。
+- 支持 Captive Portal，连接 AP 后设备会尝试自动弹出网页。
+- 支持清除 SPIFFS、关闭 AP。
+- 已联网时 AP 5 分钟后自动关闭。
+- 未连接 WiFi 前禁止关闭 AP。
+- WiFi 连接失败超过 3 次会回退到上一个 WiFi。
 
-- **多传感器采集**：
-  - 温湿度：SHT4x (I2C)
-  - 内部温度：MAX31865 + PT100 (SPI)
-  - 气体传感器：SGP41 (VOC/NOx, I2C)、MQ-2/4/7/8 (ADC)
-  - 烟雾检测：MAX30105 (I2C)
-- **2Hz 采样**（每 500ms 一次）并维护最近 10 秒历史窗口；
-- **本地状态分级**：`NORMAL` / `WARNING` / `DANGER`；
-- **声光与屏幕联动**：WS2812、蜂鸣器、OLED（5 个界面：状态、温湿度、气体、VOC、MAX30105）；
-- **MQTT 通信**：
-  - 发布主题：`sensor`
-  - 订阅主题：`statue`<sup>†</sup>
-- **远程纠偏覆盖逻辑**：当云端下发状态覆盖后，本地连续正常 60 秒再自动解除。
+### SPIFFS 存储
 
-> <sup>†</sup> **已知问题**：MQTT 订阅主题拼写为 `statue` 而非 `status`，代码中已保持一致，暂不修正以避免破坏兼容性。
+ESP32 使用 SPIFFS 保存运行配置：
 
-> 注意：WiFi、MQTT 私钥、各类阈值都在 `main.cpp` 内以常量定义，请按你的硬件环境修改。
+| 文件 | 用途 |
+|------|------|
+| `/wifi.txt` | 当前 WiFi SSID 和密码 |
+| `/wifi_prev.txt` | 上一个 WiFi SSID 和密码 |
+| `/thresholds.txt` | 当前传感器阈值 |
 
----
+阈值默认值仍在程序 `ThresholdConfig` 中定义。启动时如果 `/thresholds.txt` 不存在、打不开或某一项缺失，则对应项使用程序默认常量作为判断逻辑。
 
-## 2. Python 端能力概览
+### 阈值判断逻辑
 
-### 2.1 在线推理（`computer/main.py`）
+ESP32 本地状态判断位于 `EvaluateStatus()`：
 
-- 连接 MQTT Broker（`bemfa.com:9501`）；
-- 订阅 `sensor` 主题，解析 ESP32 上报 JSON；
-- 使用 `models_LSTM/` 中模型与 scaler 对**内部温度**和**环境温度**分别推理；
-- 当 AI 结论与 ESP32 本地状态不一致时，向 `statue`<sup>†</sup> 主题回发 `normal` 或 `danger`，用于纠偏。
+- 大多数传感器为上限判断：`当前值 > 阈值`
+- VOC 为下限判断：`voc_index < vocIndexWarn`
+- 超阈值数量为 0：`NORMAL`
+- 超阈值数量为 1 到 2：`WARNING`
+- 超阈值数量大于 2：`DANGER`
 
-### 2.2 模型训练脚本
+网页端和桌面端高亮逻辑与 ESP32 本地判断保持一致。
 
-- `train_modelLSTM.py`：LSTM 时序模型（带差分特征与阈值优化）；
-- `train_model_lstm_60s.py`：LSTM 模型（60 秒序列输入）；
-- `train_model_cnnlstm.py`：CNN + LSTM 混合模型；
-- `train_model_transformer.py`：Transformer 编码器时序模型；
-- `train_model_random_forest.py`：统计特征 + 随机森林模型。
+## 云端状态逻辑
 
-三个训练脚本都基于 `computer/data/*.csv` 构建样本，默认将模型产物输出到各自目录。
+MQTT 下行主题为 `statue`，支持消息：
 
----
+- `danger`
+- `warning`
+- `normal`
 
-## 3. 快速开始
+当前 ESP32 逻辑：
 
-### 3.1 Python 环境
+1. 云端返回 `danger`
+   - ESP32 进入云端危险锁存。
+   - 本地持续保持 `DANGER`，蜂鸣器持续报警。
 
-```bash
-cd computer
-pip install -r requirements.txt
-```
+2. 云端随后返回 `normal`
+   - ESP32 不会立刻切换到 `NORMAL`。
+   - 设备进入 `cloud_normal_pending`，仍保持 `DANGER`。
 
-### 3.2 运行在线推理服务
+3. 用户按下 ESP32 设备按键确认
+   - 解除云端危险锁存。
+   - 关闭云端覆盖。
+   - 状态重新交给本地 `EvaluateStatus()` 判断。
 
-```bash
-cd computer
-python main.py
-```
+4. 确认后
+   - 如果本地传感器仍超阈值，仍可能显示 `WARNING` 或 `DANGER`。
+   - 如果本地正常，显示 `NORMAL`。
+   - 后续一直使用本地判断，直到云端再次返回 `danger`。
 
-运行前请确认：
-- `computer/models_LSTM/config.pkl`、模型文件和 scaler 文件存在；
-- MQTT 配置与 ESP32 端一致（Broker / 主题 / ClientID）。
+## MQTT 配置
 
-### 3.3 训练模型（按需）
+默认配置位于 ESP32 `main.cpp` 和电脑端 `main_RF.py`：
 
-```bash
-cd computer
-python train_modelLSTM.py
-# 或
-python train_model_lstm_60s.py
-python train_model_cnnlstm.py
-python train_model_transformer.py
-python train_model_random_forest.py
-```
+| 项 | 值 |
+|----|----|
+| Broker | `bemfa.com` |
+| Port | `9501` |
+| ESP32 发布主题 | `sensor` |
+| ESP32 订阅主题 | `statue` |
 
----
+> 注意：订阅主题当前拼写为 `statue`，代码两端保持一致，暂不改为 `status`，避免破坏兼容。
 
-## 4. 硬件清单与引脚配置
-
-### 4.1 硬件组件
-
-| 组件 | 型号 | 数量 |
-|------|------|------|
-| 主控板 | ESP32-S3 (ESP32-S3-DevKitM-1) | 1 |
-| 温湿度传感器 | Sensirion SHT4x | 1 |
-| RTD 温度传感器 | Adafruit MAX31865 + PT100 | 1 |
-| 气体传感器 | Sensirion SGP41 (VOC/NOx) | 1 |
-| MQ 气体传感器 | MQ-2, MQ-4, MQ-7, MQ-8 | 各 1 |
-| 烟雾传感器 | SparkFun MAX30105 | 1 |
-| OLED 显示屏 | SSD1306 128x64 (I2C) | 1 |
-| RGB 灯 | WS2812 NeoPixel | 1 |
-| 蜂鸣器 | 有源蜂鸣器 (5V) | 1 |
-
-### 4.2 引脚配置
-
-| 传感器/模块 | ESP32-S3 引脚 |
-|-------------|---------------|
-| WS2812 RGB 灯 | GPIO 48 |
-| 蜂鸣器 | GPIO 18 |
-| 按键 | GPIO 17 |
-| MAX31865 CS | GPIO 10 |
-| MAX31865 MOSI | GPIO 11 |
-| MAX31865 MISO | GPIO 13 |
-| MAX31865 SCK | GPIO 12 |
-| MQ-2 | GPIO 1 (ADC) |
-| MQ-4 | GPIO 2 (ADC) |
-| MQ-8 | GPIO 3 (ADC) |
-| MQ-7 | GPIO 4 (ADC) |
-| SHT4x / SGP41 / OLED / MAX30105 | I2C (GPIO 21/22) |
-
----
-
-## 5. 数据格式
-
-### 5.1 训练数据格式
-
-训练数据采用 CSV，至少包含以下列：
-
-```csv
-Time,Temperature
-0.0,31.03
-0.5,31.05
-1.0,31.08
-```
-
-命名约定：
-- 正常样本：`temp_data_xxx.csv`
-- 异常样本：`temp_data_xxx_exception.csv`
-
-脚本会根据文件名中的 `_exception` 自动识别标签。
-
-### 5.2 MQTT 数据格式
-
-ESP32 上报 JSON 格式：
+### ESP32 上报 JSON 示例
 
 ```json
 {
-  "timestamp_ms": 1234567890,
+  "timestamp_ms": 123456,
   "temp_ambient_c": 25.5,
   "temp_internal_c": 32.1,
   "humidity_percent": 45.2,
@@ -179,42 +135,126 @@ ESP32 上报 JSON 格式：
   "mq4_ppm": 12.1,
   "mq8_ppm": 8.5,
   "mq7_ppm": 22.0,
-  "voc_index": 85,
+  "voc_index": 85.0,
   "max30105_smoke": 120,
   "max30105_temp_c": 33.5,
+  "thresholds": {
+    "temp_ambient_c": 50.0,
+    "temp_internal_c": 50.0,
+    "humidity_percent": 80.0,
+    "mq2_ppm": 200.0,
+    "mq4_ppm": 250.0,
+    "mq8_ppm": 450.0,
+    "mq7_ppm": 750.0,
+    "voc_index": 200.0,
+    "max30105_smoke": 750,
+    "max30105_temp_c": 50.0
+  },
   "status": "NORMAL"
 }
 ```
 
----
+## 电脑端功能
 
-## 6. 依赖
+### 桌面端 RF 状态显示二合一
 
-### 6.1 Python 环境
+推荐运行：
 
-- Python >= 3.8
-- `computer/requirements.txt`:
-
-```
-paho-mqtt
-numpy
-pandas
-scikit-learn
-tensorflow
-matplotlib
-seaborn
+```powershell
+cd D:\competition\BTR\computer
+.\env\Scripts\python.exe .\rf_status_app.py
 ```
 
-### 6.2 ESP32 固件
+功能：
 
-- PlatformIO
-- 框架：arduino
-- 板卡：esp32-s3-devkitm-1
+- 连接 MQTT 并订阅 `sensor`。
+- 实时显示 ESP32 上传的各传感器数值。
+- 传感器超阈值时立即高亮。
+- 绘制实时变化曲线。
+- 使用随机森林模型对内部温度和外部温度进行风险推理。
+- 当 AI 判断和 ESP32 状态不一致时，向 `statue` 发送纠偏状态。
+- 支持手动发送 `normal` / `danger`。
 
----
+### 其他在线推理脚本
 
-## 7. 说明
+```powershell
+cd D:\competition\BTR\computer
+.\env\Scripts\python.exe .\main_RF.py
+.\env\Scripts\python.exe .\main_LSTM.py
+.\env\Scripts\python.exe .\main_cnn_lstm.py
+.\env\Scripts\python.exe .\main_transformer.py
+```
 
-- 仓库中已包含部分历史训练产物（`models_*`）与备份数据（`data_backup_*`）；
-- 如需复现实验，建议从 `computer/data/` 重新训练并更新对应模型目录；
-- ESP32 示例代码位于 `ESP32/BTR/examples/`，可用于单模块联调。
+## 快速开始
+
+### ESP32 固件编译
+
+```powershell
+cd D:\competition\BTR\ESP32\BTR
+pio run
+```
+
+上传固件：
+
+```powershell
+pio run -t upload
+```
+
+### Python 环境
+
+```powershell
+cd D:\competition\BTR\computer
+python -m venv env
+.\env\Scripts\pip.exe install -r requirements.txt
+```
+
+### 训练模型
+
+```powershell
+cd D:\competition\BTR\computer
+.\env\Scripts\python.exe .\train_model_random_forest.py
+.\env\Scripts\python.exe .\train_modelLSTM.py
+.\env\Scripts\python.exe .\train_model_lstm_60s.py
+.\env\Scripts\python.exe .\train_model_cnnlstm.py
+.\env\Scripts\python.exe .\train_model_transformer.py
+```
+
+## 硬件清单
+
+| 组件 | 型号 | 数量 |
+|------|------|------|
+| 主控板 | ESP32-S3 DevKitM-1 | 1 |
+| 温湿度传感器 | Sensirion SHT4x | 1 |
+| RTD 温度传感器 | Adafruit MAX31865 + PT100 | 1 |
+| VOC 传感器 | Sensirion SGP41 | 1 |
+| MQ 气体传感器 | MQ-2 / MQ-4 / MQ-7 / MQ-8 | 各 1 |
+| 烟雾/光学传感器 | SparkFun MAX30105 | 1 |
+| OLED | SSD1306 128x64 I2C | 1 |
+| RGB 灯 | WS2812 NeoPixel | 1 |
+| 蜂鸣器 | 有源蜂鸣器 | 1 |
+| 按键 | 普通按键 | 1 |
+
+## 引脚配置
+
+| 模块 | ESP32-S3 引脚 |
+|------|---------------|
+| WS2812 RGB 灯 | GPIO 48 |
+| 蜂鸣器 | GPIO 18 |
+| 按键 | GPIO 17 |
+| MAX31865 CS | GPIO 10 |
+| MAX31865 MOSI | GPIO 11 |
+| MAX31865 MISO | GPIO 13 |
+| MAX31865 SCK | GPIO 12 |
+| MQ-2 | GPIO 1 |
+| MQ-4 | GPIO 2 |
+| MQ-8 | GPIO 3 |
+| MQ-7 | GPIO 4 |
+| SHT4x / SGP41 / OLED / MAX30105 | I2C GPIO 21 / 22 |
+
+## 常见排查
+
+- 桌面端提示 MQTT 未连接：检查网络、Broker、端口和 client id。
+- 桌面端已连接但没有数据：检查 ESP32 串口是否有 `Connecting to MQTT... connected`。
+- ESP32 串口出现 `MQTT publish failed`：payload 过大或 MQTT 未连接，当前固件已将 PubSubClient 缓冲区增大到 1024。
+- 修改阈值后状态未变化：网页保存阈值后会立即写入 SPIFFS 并重新计算状态。
+- 清除 SPIFFS 后：WiFi 和阈值配置都会清空，阈值回到程序默认常量，设备会重新进入 AP 配网。
