@@ -332,24 +332,6 @@ cd D:\competition\BTR\computer
 | MQ-7 | GPIO 4 |
 | SHT4x / SGP41 / OLED / MAX30105 | I2C GPIO 21 / 22 |
 
-## 演示流程
-
-建议视频或现场演示按以下顺序进行：
-
-1. 打开 ESP32 网页端和电脑桌面端，显示 `NORMAL`。
-2. 展示温度、湿度、MQ、VOC、烟雾等实时数据和曲线。
-3. 使用安全方式模拟升温或气体/VOC 波动。
-4. 观察桌面端 RF 风险概率变化。
-5. 展示电脑端向 ESP32 下发 `danger` 或 `normal`。
-6. 观察 OLED、RGB 灯、蜂鸣器的联动响应。
-
-## 常见排查
-
-- 桌面端提示 MQTT 未连接：检查网络、Broker、端口和 client id。
-- 桌面端已连接但没有数据：检查 ESP32 串口是否有 `Connecting to MQTT... connected`。
-- ESP32 串口出现 `MQTT publish failed`：payload 过大或 MQTT 未连接，当前固件已将 PubSubClient 缓冲区增大到 1024。
-- 修改阈值后状态未变化：网页保存阈值后会立即写入 SPIFFS 并重新计算状态。
-- 清除 SPIFFS 后：WiFi 和阈值配置都会清空，阈值回到程序默认常量，设备会重新进入 AP 配网。
 
 ---
 
